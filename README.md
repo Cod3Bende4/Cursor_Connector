@@ -299,7 +299,7 @@ cursor-telegram-bridge/
 
 This repository is public and open to contributions under the [MIT License](LICENSE). Please read [CONTRIBUTING.md](CONTRIBUTING.md) for workflow and tests.
 
-`main` is protected by a GitHub **ruleset** that requires **pull requests** for most contributors. The repository owner can bypass the rule when needed (personal repos cannot use the older “bypass list” API the same way; the ruleset approach achieves the same outcome).
+`main` is protected by a GitHub **ruleset** that requires **pull requests** for collaborators and outside contributors. The owner is on the ruleset bypass list for merges; **direct pushes to `main` can still be blocked**—use a PR branch if `git push` to `main` fails.
 
 ---
 
