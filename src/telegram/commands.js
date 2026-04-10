@@ -44,7 +44,20 @@ function registerCommands(bot, chatId, statusWidget) {
   // /help
   bot.onText(/\/help/, async (msg) => {
     if (String(msg.chat.id) !== String(chatId)) return;
-    return bot.emit('text', { ...msg, text: '/start' }); // reuse /start
+    await bot.sendMessage(chatId,
+      `*Cursor Telegram Bridge — Help*\n\n` +
+      `Send any text to forward it to Cursor\\.\n\n` +
+      `/start — welcome\n` +
+      `/mode plan\\|debug\\|ask\\|agent\n` +
+      `/project \\<name\\>\n` +
+      `/projects — list projects\n` +
+      `/skill \\<name\\> — next message\n` +
+      `/skills — list skills\n` +
+      `/status — widget snapshot\n` +
+      `/clear — new chat in Cursor\n` +
+      `/help — this message`,
+      { parse_mode: 'MarkdownV2' }
+    );
   });
 
   // /status

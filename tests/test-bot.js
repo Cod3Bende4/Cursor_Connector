@@ -44,5 +44,7 @@ async function main() {
 
 main().catch(err => {
   console.error('❌ Test FAILED:', err.message);
+  console.error('\nTip: Ensure `.cursor/rules/telegram-bridge.mdc` is active so the AI appends to OUTPUT_WATCH_FILE,');
+  console.error('or copy the assistant reply to the clipboard before the timeout.');
   process.exit(1);
 });

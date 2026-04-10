@@ -1,117 +1,26 @@
 /**
  * cursor/responseCapture.js
  *
- * Captures Cursor AI responses using three parallel strategies:
- *   A — Output file watcher (most reliable — requires .cursor/rules/telegram-bridge.mdc)
- *   B — Clipboard watcher (works without rules, but needs auto-copy or manual copy)
- *   C — AX screen read (fallback — reads text area content via accessibility)
- *
- * Returns the first strategy that produces a result.
+ * Captures Cursor AI responses using three strategies (PLAN.md order):
+ *   A — Clipboard watcher (primary): poll + optional copy-last-response.applescript
+ *   B — Output file watcher (secondary): telegram-bridge.mdc → OUTPUT_WATCH_FILE
+ *   C — AX read (fallback): last text area in window (fragile with Electron)
  */
 
 const fs = require('fs');
+const path = require('path');
 const { execFile, execSync } = require('child_process');
 const chokidar = require('chokidar');
 const logger = require('../utils/logger');
 const { config } = require('../utils/config');
 
 const BRIDGE_START = '---CURSOR-BRIDGE-START---';
-const BRIDGE_END   = '---CURSOR-BRIDGE-END---';
+const BRIDGE_END = '---CURSOR-BRIDGE-END---';
 
-// ─── Strategy A: Output file watcher ────────────────────────────────────────
-
-/**
- * Wait for a new response to appear in the output watch file.
- * The Cursor rule appends delimited blocks; we watch for a new END marker.
- * @param {number} timeoutMs
- * @returns {Promise<string>} response text
- */
-function waitForFileResponse(timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const watchFile = config.capture.outputWatchFile;
-
-    // Record file size before injection so we can detect new content
-    let prevSize = 0;
-    try { prevSize = fs.statSync(watchFile).size; } catch { prevSize = 0; }
-
-    const watcher = chokidar.watch(watchFile, { usePolling: true, interval: 300 });
-    const timer = setTimeout(() => {
-      watcher.close();
-      reject(new Error('File response timeout'));
-    }, timeoutMs);
-
-    watcher.on('change', () => {
-      try {
-        const content = fs.readFileSync(watchFile, 'utf8');
-        // Find all complete blocks
-        const blocks = [];
-        let searchFrom = 0;
-        while (true) {
-          const start = content.indexOf(BRIDGE_START, searchFrom);
-          if (start === -1) break;
-          const end = content.indexOf(BRIDGE_END, start);
-          if (end === -1) break;
-          const blockContent = content.slice(start + BRIDGE_START.length, end).trim();
-          blocks.push(blockContent);
-          searchFrom = end + BRIDGE_END.length;
-        }
-
-        if (blocks.length > 0) {
-          // Take the last complete block (newest response)
-          const lastBlock = blocks[blocks.length - 1];
-          // Verify it's new content (after the previous file size)
-          const blockPosition = content.lastIndexOf(BRIDGE_START);
-          if (blockPosition >= prevSize || prevSize === 0) {
-            clearTimeout(timer);
-            watcher.close();
-            resolve(lastBlock);
-          }
-        }
-      } catch (err) {
-        logger.debug('File watcher read error:', err.message);
-      }
-    });
-  });
-}
-
-// ─── Strategy B: Clipboard watcher ──────────────────────────────────────────
-
-function getClipboard() {
-  try {
-    return execSync('pbpaste', { encoding: 'utf8' });
-  } catch { return ''; }
-}
-
-/**
- * Poll clipboard for a change that looks like a Cursor response.
- * Before calling this, snapshot the current clipboard content.
- * @param {string} previousClipboard
- * @param {number} timeoutMs
- */
-function waitForClipboardResponse(previousClipboard, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-
-    const interval = setInterval(() => {
-      const current = getClipboard();
-      if (
-        current !== previousClipboard &&
-        current.trim().length > 0 &&
-        Date.now() - start > 1000  // at least 1s after injection
-      ) {
-        clearInterval(interval);
-        resolve(current);
-      }
-
-      if (Date.now() - start > timeoutMs) {
-        clearInterval(interval);
-        reject(new Error('Clipboard response timeout'));
-      }
-    }, 500);
-  });
-}
-
-// ─── Strategy C: AX text read ────────────────────────────────────────────────
+const COPY_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'copy-last-response.applescript');
+const CLIPBOARD_POLL_MS = 500;
+const COPY_ASSIST_INTERVAL_MS = 2500;
+const CLIPBOARD_MIN_WAIT_MS = 1000;
 
 function runAppleScript(script) {
   return new Promise((resolve, reject) => {
@@ -122,15 +31,229 @@ function runAppleScript(script) {
   });
 }
 
+function runAppleScriptFile(scriptPath) {
+  return new Promise((resolve, reject) => {
+    execFile('osascript', [scriptPath], (err, stdout, stderr) => {
+      if (err) return reject(new Error(stderr || err.message));
+      resolve(stdout.trim());
+    });
+  });
+}
+
+/**
+ * Optional: run copy-last-response.applescript so clipboard updates with the last reply.
+ */
+async function attemptCopyLastResponseToClipboard() {
+  try {
+    await fs.promises.access(COPY_SCRIPT, fs.constants.R_OK);
+  } catch {
+    return;
+  }
+  try {
+    await runAppleScriptFile(COPY_SCRIPT);
+  } catch (err) {
+    logger.debug('copy-last-response.applescript:', err.message);
+  }
+}
+
+// ─── Strategy B: Output file watcher ────────────────────────────────────────
+
+/**
+ * Index in `content` after the last complete delimiter (only new appends count).
+ */
+function endIndexAfterLastClosedBlock(content) {
+  const lastEnd = content.lastIndexOf(BRIDGE_END);
+  if (lastEnd === -1) return 0;
+  return lastEnd + BRIDGE_END.length;
+}
+
+/**
+ * Parse complete blocks whose closing delimiter ends after `minEndIndex`.
+ */
+function newBlocksAfter(content, minEndIndex) {
+  const out = [];
+  let search = 0;
+  while (true) {
+    const start = content.indexOf(BRIDGE_START, search);
+    if (start === -1) break;
+    const end = content.indexOf(BRIDGE_END, start + BRIDGE_START.length);
+    if (end === -1) break;
+    const endExclusive = end + BRIDGE_END.length;
+    if (endExclusive > minEndIndex) {
+      out.push(content.slice(start + BRIDGE_START.length, end).trim());
+    }
+    search = endExclusive;
+  }
+  return out;
+}
+
+/**
+ * @param {number} timeoutMs
+ * @param {string} [watchFileOverride]
+ * @param {AbortSignal} [signal]
+ */
+function waitForFileResponse(timeoutMs, watchFileOverride, signal) {
+  return new Promise((resolve, reject) => {
+    const watchFile = watchFileOverride || config.capture.outputWatchFile;
+
+    let minEndIndex = 0;
+    try {
+      const c = fs.existsSync(watchFile) ? fs.readFileSync(watchFile, 'utf8') : '';
+      minEndIndex = endIndexAfterLastClosedBlock(c);
+    } catch {
+      minEndIndex = 0;
+    }
+
+    const watcher = chokidar.watch(watchFile, { usePolling: true, interval: 300 });
+
+    const teardown = () => {
+      watcher.close();
+    };
+
+    const fail = (err) => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      teardown();
+      reject(err);
+    };
+
+    const timer = setTimeout(() => {
+      fail(new Error('File response timeout'));
+    }, timeoutMs);
+
+    const onAbort = () => {
+      fail(new Error('aborted'));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        fail(new Error('aborted'));
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const tryResolveFromContent = () => {
+      try {
+        if (!fs.existsSync(watchFile)) return;
+        const content = fs.readFileSync(watchFile, 'utf8');
+        const blocks = newBlocksAfter(content, minEndIndex);
+        if (blocks.length > 0) {
+          clearTimeout(timer);
+          if (signal) signal.removeEventListener('abort', onAbort);
+          teardown();
+          resolve(blocks[blocks.length - 1]);
+        }
+      } catch (err) {
+        logger.debug('File initial read error:', err.message);
+      }
+    };
+
+    tryResolveFromContent();
+
+    watcher.on('change', () => {
+      try {
+        const content = fs.readFileSync(watchFile, 'utf8');
+        const blocks = newBlocksAfter(content, minEndIndex);
+        if (blocks.length > 0) {
+          clearTimeout(timer);
+          if (signal) signal.removeEventListener('abort', onAbort);
+          teardown();
+          resolve(blocks[blocks.length - 1]);
+        }
+      } catch (err) {
+        logger.debug('File watcher read error:', err.message);
+      }
+    });
+
+    watcher.on('add', tryResolveFromContent);
+
+    watcher.on('error', (err) => {
+      logger.debug('Chokidar error:', err.message);
+    });
+  });
+}
+
+// ─── Strategy A: Clipboard watcher ──────────────────────────────────────────
+
+function getClipboard() {
+  try {
+    return execSync('pbpaste', { encoding: 'utf8' });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Poll clipboard; optional copy-assist helps populate clipboard with the assistant reply.
+ * @param {string} previousClipboard
+ * @param {number} timeoutMs
+ * @param {AbortSignal} [signal]
+ */
+function waitForClipboardResponse(previousClipboard, timeoutMs, signal) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    let copyAssistTimer = null;
+
+    const stop = () => {
+      clearInterval(interval);
+      if (copyAssistTimer) clearInterval(copyAssistTimer);
+    };
+
+    const tick = () => {
+      if (signal?.aborted) {
+        stop();
+        reject(new Error('aborted'));
+        return;
+      }
+
+      const current = getClipboard();
+      if (
+        current !== previousClipboard &&
+        current.trim().length > 0 &&
+        Date.now() - start > CLIPBOARD_MIN_WAIT_MS
+      ) {
+        stop();
+        resolve(current);
+        return;
+      }
+
+      if (Date.now() - start > timeoutMs) {
+        stop();
+        reject(new Error('Clipboard response timeout'));
+      }
+    };
+
+    const interval = setInterval(tick, CLIPBOARD_POLL_MS);
+
+    try {
+      copyAssistTimer = setInterval(() => {
+        attemptCopyLastResponseToClipboard().catch(() => {});
+      }, COPY_ASSIST_INTERVAL_MS);
+    } catch {
+      /* ignore */
+    }
+
+    signal?.addEventListener(
+      'abort',
+      () => {
+        stop();
+        reject(new Error('aborted'));
+      },
+      { once: true }
+    );
+  });
+}
+
+// ─── Strategy C: AX text read ────────────────────────────────────────────────
+
 /**
  * Read the last AI message from Cursor's chat via accessibility tree.
- * Note: This is fragile and depends on Cursor's AX element structure.
+ * Note: Often empty for Electron web-view chat; used as last resort.
  */
 async function readLastAIMessageFromAX() {
   const script = `
     tell application "System Events"
       tell process "${config.cursor.appName}"
-        -- Try to get the last non-input text area (the last AI message bubble)
         set allTextAreas to every text area of window 1
         if (count of allTextAreas) > 1 then
           return value of last item of allTextAreas
@@ -146,76 +269,73 @@ async function readLastAIMessageFromAX() {
 // ─── Master capture function ─────────────────────────────────────────────────
 
 /**
- * Wait for Cursor's response using all three strategies in parallel.
- * The fastest one that returns a non-empty result wins.
+ * Wait for Cursor's response using strategies A and B in parallel; C if both fail.
  *
- * @param {{ timeoutMs?: number }} options
- * @returns {Promise<{ text: string, strategy: string }>}
+ * @param {{ timeoutMs?: number, outputWatchFile?: string }} options
+ * @returns {Promise<{ text: string, strategy: 'clipboard' | 'file' | 'ax' }>}
  */
 async function waitForResponse(options = {}) {
   const timeoutMs = options.timeoutMs || config.capture.timeoutMs;
+  const watchFile = options.outputWatchFile || config.capture.outputWatchFile;
   const previousClipboard = getClipboard();
 
-  logger.debug('Starting response capture (all strategies)...');
+  logger.debug('Starting response capture (clipboard + file; AX fallback)...');
 
-  const strategies = [
-    // Strategy A
-    waitForFileResponse(timeoutMs)
-      .then(text => ({ text, strategy: 'file' }))
-      .catch(err => { logger.debug('Strategy A failed:', err.message); return null; }),
+  const ac = new AbortController();
+  const { signal } = ac;
 
-    // Strategy B
-    waitForClipboardResponse(previousClipboard, timeoutMs)
-      .then(text => ({ text, strategy: 'clipboard' }))
-      .catch(err => { logger.debug('Strategy B failed:', err.message); return null; }),
-  ];
+  const clip = waitForClipboardResponse(previousClipboard, timeoutMs, signal).then((text) => ({
+    text,
+    strategy: /** @type {const} */ ('clipboard'),
+  }));
 
-  // Race all strategies
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const results = [];
+  const file = waitForFileResponse(timeoutMs, watchFile, signal).then((text) => ({
+    text,
+    strategy: /** @type {const} */ ('file'),
+  }));
 
-    strategies.forEach(p => {
-      p.then(result => {
-        results.push(result);
-        if (!settled && result && result.text) {
-          settled = true;
-          resolve(result);
-        }
-      });
-    });
-
-    // If all strategies fail, return the best effort from AX
-    Promise.all(strategies).then(async () => {
-      if (!settled) {
-        try {
-          const axText = await readLastAIMessageFromAX();
-          if (axText) {
-            settled = true;
-            resolve({ text: axText, strategy: 'ax' });
-          } else {
-            reject(new Error('All capture strategies exhausted with no response'));
-          }
-        } catch (err) {
-          reject(new Error('All capture strategies failed: ' + err.message));
-        }
+  try {
+    const result = await Promise.any([clip, file]);
+    ac.abort();
+    return result;
+  } catch (err) {
+    ac.abort();
+    logger.debug('Clipboard + file both failed:', err instanceof AggregateError ? 'AggregateError' : err.message);
+    try {
+      const axText = await readLastAIMessageFromAX();
+      if (axText && axText.trim()) {
+        return { text: axText.trim(), strategy: 'ax' };
       }
-    });
-  });
+    } catch (e) {
+      logger.debug('Strategy C (AX):', e.message);
+    }
+    throw new Error('All capture strategies exhausted with no response');
+  }
 }
 
 // Test runner
 if (require.main === module) {
   console.log('Waiting for a Cursor response (max 30s)...');
   waitForResponse({ timeoutMs: 30000 })
-    .then(r => {
+    .then((r) => {
       console.log(`\n--- Response via [${r.strategy}] ---\n${r.text}\n---`);
       process.exit(0);
     })
-    .catch(e => {
+    .catch((e) => {
       console.error('Failed:', e.message);
       process.exit(1);
     });
 }
 
-module.exports = { waitForResponse, getClipboard };
+module.exports = {
+  waitForResponse,
+  getClipboard,
+  waitForFileResponse,
+  waitForClipboardResponse,
+  readLastAIMessageFromAX,
+  attemptCopyLastResponseToClipboard,
+  BRIDGE_START,
+  BRIDGE_END,
+  newBlocksAfter,
+  endIndexAfterLastClosedBlock,
+};
