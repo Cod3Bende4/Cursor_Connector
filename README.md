@@ -1,6 +1,11 @@
 # Cursor Telegram Bridge 🤖↔️📱
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Cod3Bende4/Cursor_Connector/blob/main/LICENSE)
+[![Node.js 20+](https://img.shields.io/badge/node.js-20%2B-brightgreen)](https://nodejs.org/)
+
 Control Cursor IDE from Telegram on your Mac. Send prompts, get responses, switch modes, manage projects — all from your phone.
+
+**License:** [MIT](LICENSE) · **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) · **Security:** [SECURITY.md](SECURITY.md) · **Code of conduct:** [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 ---
 
@@ -10,8 +15,10 @@ A local Node.js daemon runs alongside Cursor on your Mac. It:
 
 - Connects to your personal Telegram bot
 - Injects your messages into Cursor's chat panel via macOS accessibility APIs
-- Captures Cursor's AI responses and sends them back to Telegram
-- Monitors mode and context window state in real time
+- Captures Cursor's AI responses and sends them back to Telegram (replies are formatted as **Telegram HTML**: bold, inline code, fenced blocks, links)
+- Monitors mode and polls an estimated context usage (bridge-side token heuristic)
+- On startup, syncs mode once before the Telegram status widget so mode is less often stuck on “unknown”
+- While waiting for a reply, can refresh a “thinking” line on Telegram with elapsed time, mode, and estimated context (optional; see `.env.example`)
 
 ```
 [Telegram]  ←→  [Local Daemon]  ←→  [Cursor IDE]
@@ -111,6 +118,14 @@ Then open Telegram, send any message to your bot, and watch it appear in Cursor.
 
 ---
 
+## Keeping it running (constraints)
+
+- **The Mac must stay on and awake.** The bridge is a normal local Node process. **Sleep** suspends it and breaks Telegram polling; **shutdown** stops it until you start it again. Only the **display** sleeping (with the Mac still awake) is fine. For 24/7 use, disable sleep or use an always-on Mac; restart the bridge after reboot (`pm2` / `node src/index.js` — see [Managing the Daemon](#managing-the-daemon)).
+- **Select the right Agent chat in Cursor before using Telegram.** The bridge injects into **whichever chat thread is focused** in Cursor (⌘L focuses the panel, but not a specific thread). **`/project`** opens a workspace folder; it does **not** switch the highlighted chat in the Agent sidebar. If another project’s chat is selected, your Telegram messages will go **there**. After switching projects or opening a new chat, **click the intended chat** under the correct repo in Cursor’s sidebar, then send from Telegram.
+- **Per-project rule for capture:** Strategy A needs `.cursor/rules/telegram-bridge.mdc` in **each** workspace you drive from Telegram (copy from this repo). Without it, capture often falls back to clipboard/AX.
+
+---
+
 ## Telegram Commands
 
 
@@ -167,7 +182,9 @@ Polls the clipboard for changes after injection. Catches responses when Cursor's
 **Strategy C — Accessibility tree**
 Reads Cursor's chat panel text areas directly via AppleScript. Used as a last resort.
 
-> The Cursor rule (Strategy A) is the most reliable. Ensure `.cursor/rules/telegram-bridge.mdc` is present in your project root.
+> The Cursor rule (Strategy A) is the most reliable. Copy `telegram-bridge.mdc` into **every** project root you use with `/project` so capture keeps working after switching folders.
+
+**Telegram formatting:** Outgoing messages use **`parse_mode: HTML`** (`src/telegram/formatter.js`) so bold, code, and links survive the trip to Telegram. The pinned status widget still uses MarkdownV2 for short, controlled text.
 
 ---
 
@@ -236,17 +253,21 @@ cursor-telegram-bridge/
 │   │   ├── injector.js           # AppleScript message injection
 │   │   ├── modeSwitch.js         # Mode switching (Ask/Agent/Plan/Debug)
 │   │   ├── projectSwitch.js      # Project switching
-│   │   ├── newChat.js            # New chat via Command Palette
+│   │   ├── applescriptUtil.js    # Shared AppleScript helpers
+│   │   ├── modelPicker.js        # /setmodel (⌘/ model dropdown)
+│   │   ├── newChat.js            # /newchat via Command Palette
 │   │   ├── responseCapture.js    # Three-strategy response capture
 │   │   └── skillsManager.js      # Skills prefix management
 │   ├── telegram/
 │   │   ├── bot.js                # Main bot + message loop
 │   │   ├── commands.js           # /command handlers
-│   │   └── formatter.js          # Markdown formatting + chunking
+│   │   ├── formatter.js          # HTML replies + status MarkdownV2 + chunking
+│   │   └── progressUpdates.js    # Live “thinking” line while waiting
 │   ├── monitor/
-│   │   └── contextMonitor.js     # Mode + context polling
+│   │   └── contextMonitor.js     # Mode + context polling + startup sync
 │   └── utils/
 │       ├── config.js             # Env var loader + validator
+│       ├── modelsRegistry.js     # Optional models.json for /setmodel
 │       └── logger.js             # Timestamped logger
 ├── scripts/
 │   ├── setup.sh                  # One-time setup
@@ -261,11 +282,24 @@ cursor-telegram-bridge/
 │   └── rules/
 │       └── telegram-bridge.mdc   # Cursor rule for response output
 ├── .env.example                  # Config template
+├── models.json.example           # Optional aliases for /setmodel
 ├── projects.json                 # Project registry
 ├── ecosystem.config.js           # pm2 config
+├── LICENSE                       # MIT
+├── CONTRIBUTING.md               # How to contribute + branch policy
+├── CODE_OF_CONDUCT.md            # Contributor Covenant
+├── SECURITY.md                   # Vulnerability reporting
 ├── PLAN.md                       # Full implementation plan
 └── README.md                     # This file
 ```
+
+---
+
+## Open source & branch rules
+
+This repository is public and open to contributions under the [MIT License](LICENSE). Please read [CONTRIBUTING.md](CONTRIBUTING.md) for workflow and tests.
+
+`main` is protected by a GitHub **ruleset** that requires **pull requests** for most contributors. The repository owner can bypass the rule when needed (personal repos cannot use the older “bypass list” API the same way; the ruleset approach achieves the same outcome).
 
 ---
 
@@ -283,6 +317,8 @@ cursor-telegram-bridge/
 - **macOS only** — uses AppleScript/accessibility APIs
 - **AX paths are version-sensitive** — Cursor UI updates may require path updates in `injector.js` and `modeSwitch.js`
 - **Strategy A requires AI compliance** — the Cursor rule must be followed by the AI; works best in Agent mode
-- **Context % is approximate** — based on character counting unless readable from Cursor's UI
+- **Context % in the widget is a bridge estimate** — from Telegram↔Cursor traffic (chars → tokens), not Cursor’s internal meter; tune `CONTEXT_WINDOW_TOKENS_ESTIMATE` in `.env` if needed
+- **Injection targets the focused chat** — not “the project you picked in Telegram” unless that chat is selected in Cursor (see [Keeping it running](#keeping-it-running-constraints))
+- **Machine must be awake** — sleep or power-off stops the bridge; restart the process after reboot
 - **Cannot access Cursor's file tree** from Telegram (out of scope for v1)
 
