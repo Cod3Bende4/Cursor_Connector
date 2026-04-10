@@ -1,17 +1,17 @@
 {
   "projects": [
     {
-      "name": "my-project",
-      "displayName": "My Project",
-      "path": "/Users/yourname/projects/my-project",
+      "name": "cyberanzen",
+      "displayName": "cyberanzen",
+      "path": "/Users/coder/WorkBench/cyberanzen",
       "skills": ["security", "tdd"],
       "defaultMode": "agent",
       "emoji": "🚀"
     },
     {
-      "name": "api-server",
-      "displayName": "API Server",
-      "path": "/Users/yourname/projects/api-server",
+      "name": "cursor-connect",
+      "displayName": "Cursor Connect",
+      "path": "/Users/coder/WorkBench/Cursor_Connector",
       "skills": ["security", "backend"],
       "defaultMode": "plan",
       "emoji": "🔌"

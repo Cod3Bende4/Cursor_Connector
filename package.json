@@ -4,11 +4,13 @@
   "description": "Control Cursor IDE from Telegram on macOS",
   "main": "src/index.js",
   "scripts": {
+    "test": "npm run test:capture:unit",
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "setup": "bash scripts/setup.sh",
     "test:inject": "node tests/test-injection.js",
     "test:capture": "node tests/test-capture.js",
+    "test:capture:unit": "node tests/test-capture-unit.js",
     "test:bot": "node tests/test-bot.js"
   },
   "keywords": ["cursor", "telegram", "bridge", "automation", "macos"],
