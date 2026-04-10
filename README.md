@@ -7,6 +7,7 @@ Control Cursor IDE from Telegram on your Mac. Send prompts, get responses, switc
 ## How It Works
 
 A local Node.js daemon runs alongside Cursor on your Mac. It:
+
 - Connects to your personal Telegram bot
 - Injects your messages into Cursor's chat panel via macOS accessibility APIs
 - Captures Cursor's AI responses and sends them back to Telegram
@@ -45,12 +46,14 @@ bash scripts/setup.sh
 ```
 
 Edit `.env`:
+
 ```
 TELEGRAM_BOT_TOKEN=your_token_from_botfather
 TELEGRAM_ALLOWED_CHAT_ID=your_chat_id_from_userinfobot
 ```
 
 Edit `projects.json` — add your real project paths:
+
 ```json
 {
   "projects": [
@@ -110,21 +113,23 @@ Then open Telegram, send any message to your bot, and watch it appear in Cursor.
 
 ## Telegram Commands
 
-| Command | Description |
-|---|---|
-| `/start` | Welcome + current status |
-| `/status` | Show mode, project, context % |
-| `/mode plan` | Switch to Plan mode |
-| `/mode debug` | Switch to Debug mode |
-| `/mode ask` | Switch to Ask mode |
-| `/mode agent` | Switch to Agent mode |
-| `/project <name>` | Switch active project |
-| `/projects` | List all configured projects |
-| `/skill security` | Apply Security skill to next message |
-| `/skill tdd` | Apply TDD skill to next message |
-| `/skills` | List all available skills |
-| `/clear` | Open new chat in Cursor (resets context) |
-| `/help` | Show all commands |
+
+| Command           | Description                              |
+| ----------------- | ---------------------------------------- |
+| `/start`          | Welcome + current status                 |
+| `/status`         | Show mode, project, context %            |
+| `/mode plan`      | Switch to Plan mode                      |
+| `/mode debug`     | Switch to Debug mode                     |
+| `/mode ask`       | Switch to Ask mode                       |
+| `/mode agent`     | Switch to Agent mode                     |
+| `/project <name>` | Switch active project                    |
+| `/projects`       | List all configured projects             |
+| `/skill security` | Apply Security skill to next message     |
+| `/skill tdd`      | Apply TDD skill to next message          |
+| `/skills`         | List all available skills                |
+| `/clear`          | Open new chat in Cursor (resets context) |
+| `/help`           | Show all commands                        |
+
 
 ---
 
@@ -186,21 +191,25 @@ pm2 save
 ## Troubleshooting
 
 **Messages not appearing in Cursor**
+
 - Check Accessibility permission: System Settings → Privacy → Accessibility
 - Run `node scripts/discover-ax-paths.js` to verify element paths
 - Check `pm2 logs cursor-bridge` for errors
 - Make sure Cursor's chat panel is open (`Cmd+L`)
 
 **No response coming back to Telegram**
+
 - Check the `.cursor/rules/telegram-bridge.mdc` rule is in your project
 - Verify `/tmp/cursor-bridge-output.txt` exists and is writable: `ls -la /tmp/cursor-bridge-output.txt`
 - Run `node tests/test-capture.js` and manually submit a message in Cursor
 
 **Wrong mode button paths after Cursor update**
+
 - Re-run `node scripts/discover-ax-paths.js`
 - Update `MODE_SHORTCUTS` and `clickElementByLabel` paths in `src/cursor/modeSwitch.js`
 
 **"Cursor is not running" even when it is**
+
 - Check `CURSOR_APP_NAME` in `.env` matches the exact app name (check Activity Monitor)
 
 ---
@@ -263,3 +272,4 @@ cursor-telegram-bridge/
 - **Strategy A requires AI compliance** — the Cursor rule must be followed by the AI; works best in Agent mode
 - **Context % is approximate** — based on character counting unless readable from Cursor's UI
 - **Cannot access Cursor's file tree** from Telegram (out of scope for v1)
+
