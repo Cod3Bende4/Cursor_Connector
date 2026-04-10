@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security
+    url: https://github.com/Cod3Bende4/Cursor_Connector/blob/main/SECURITY.md
+    about: Report vulnerabilities privately — do not use public issues for security.
