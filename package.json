@@ -1,0 +1,28 @@
+{
+  "name": "cursor-telegram-bridge",
+  "version": "1.0.0",
+  "description": "Control Cursor IDE from Telegram on macOS",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "setup": "bash scripts/setup.sh",
+    "test:inject": "node tests/test-injection.js",
+    "test:capture": "node tests/test-capture.js",
+    "test:bot": "node tests/test-bot.js"
+  },
+  "keywords": ["cursor", "telegram", "bridge", "automation", "macos"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.0",
+    "chokidar": "^3.6.0",
+    "node-notifier": "^10.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

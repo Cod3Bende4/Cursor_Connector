@@ -1,0 +1,20 @@
+{
+  "projects": [
+    {
+      "name": "my-project",
+      "displayName": "My Project",
+      "path": "/Users/yourname/projects/my-project",
+      "skills": ["security", "tdd"],
+      "defaultMode": "agent",
+      "emoji": "🚀"
+    },
+    {
+      "name": "api-server",
+      "displayName": "API Server",
+      "path": "/Users/yourname/projects/api-server",
+      "skills": ["security", "backend"],
+      "defaultMode": "plan",
+      "emoji": "🔌"
+    }
+  ]
+}
