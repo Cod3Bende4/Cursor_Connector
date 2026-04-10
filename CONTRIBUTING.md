@@ -5,7 +5,7 @@ Thanks for your interest in contributing. This project is open source under the 
 ## Branch policy (`main`)
 
 - **Pull requests are required** for changes landing on `main` from collaborators and forks.
-- The repository owner (**@Cod3Bende4**) is on the **bypass list** for the branch ruleset so they can push or merge without a PR when needed.
+- The repository owner (**@Cod3Bende4**) is on the ruleset **bypass list** so they can **merge** PRs and use other bypass paths GitHub allows for that ruleset. **Direct `git push` to `main` may still be rejected** by the “require pull request” rule; if that happens, push a branch and open a PR (or merge from the GitHub UI / `gh pr merge`).
 - Use a **feature branch** (`feat/…`, `fix/…`) and open a PR against `main` for anything you expect others to review.
 
 If you use the GitHub CLI, you can check active rules with:
