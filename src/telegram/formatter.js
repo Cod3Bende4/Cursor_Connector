@@ -1,12 +1,23 @@
 /**
  * telegram/formatter.js
  *
- * Formats Cursor responses for Telegram's MarkdownV2 parse mode.
- * Handles: code blocks, inline code, bold, links, and character escaping.
- * Also splits long messages into chunks within Telegram's 4096-char limit.
+ * Formats Cursor responses for Telegram: **HTML** parse mode for AI replies (reliable),
+ * MarkdownV2 for the pinned status widget (short, controlled text).
  */
 
 const MAX_LENGTH = 4096;
+
+/** Telegram HTML: escape text outside tags. */
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeHtmlAttr(text) {
+  return escapeHtml(text).replace(/"/g, '&quot;');
+}
 
 /**
  * Escape special MarkdownV2 characters outside of code blocks.
@@ -17,77 +28,116 @@ function escapeMarkdownV2(text) {
 }
 
 /**
- * Convert a plain text Cursor response to Telegram MarkdownV2.
- *
- * Preserves:
- *  - ``` code blocks ``` (with language hint)
- *  - `inline code`
- *  - **bold** → *bold*
- *  - Numbered lists, bullet lists (left as-is, escaped)
- *
- * @param {string} text
- * @returns {string}
+ * One line of prose: markdown-like tokens → Telegram-safe HTML.
  */
-function formatResponse(text) {
-  if (!text) return '_(empty response)_';
+function formatMarkdownLineHtml(line) {
+  if (line === '') return '';
+  const re = /(\[[^\]]+\]\([^)]+\))|(`[^`]+`)|(\*\*.+?\*\*)/g;
+  const parts = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > lastIndex) {
+      parts.push(escapeHtml(line.slice(lastIndex, m.index)));
+    }
+    const full = m[0];
+    if (full.startsWith('[')) {
+      const im = full.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (im) {
+        const href = escapeHtmlAttr(im[2]);
+        parts.push(`<a href="${href}">${escapeHtml(im[1])}</a>`);
+      } else {
+        parts.push(escapeHtml(full));
+      }
+    } else if (full.startsWith('`')) {
+      parts.push(`<code>${escapeHtml(full.slice(1, -1))}</code>`);
+    } else if (full.startsWith('**')) {
+      parts.push(`<b>${escapeHtml(full.slice(2, -2))}</b>`);
+    } else {
+      parts.push(escapeHtml(full));
+    }
+    lastIndex = m.index + full.length;
+  }
+  if (lastIndex < line.length) {
+    parts.push(escapeHtml(line.slice(lastIndex)));
+  }
+  return parts.join('');
+}
 
-  // Process line by line to handle code blocks correctly
+/**
+ * Convert a Cursor reply to Telegram **HTML** (parse_mode HTML).
+ * More reliable than MarkdownV2 (fewer API rejects → no silent plain-text fallback).
+ */
+function formatResponseHtml(text) {
+  if (!text) return '<i>(empty response)</i>';
+
   const lines = text.split('\n');
   const output = [];
   let inCodeBlock = false;
-  let codeLang = '';
+  let codeLines = [];
 
   for (const line of lines) {
-    if (!inCodeBlock && line.startsWith('```')) {
+    const openFence = line.match(/^(\s*)```(.*)$/);
+
+    if (!inCodeBlock && openFence) {
       inCodeBlock = true;
-      codeLang = line.slice(3).trim();
-      output.push('```' + codeLang);
+      codeLines = [];
       continue;
     }
 
     if (inCodeBlock) {
-      if (line.startsWith('```')) {
+      if (line.trim().startsWith('```')) {
         inCodeBlock = false;
-        output.push('```');
+        const body = codeLines.join('\n');
+        output.push(`<pre>${escapeHtml(body)}</pre>`);
+        codeLines = [];
       } else {
-        // Inside code block — no escaping needed
-        output.push(line);
+        codeLines.push(line);
       }
       continue;
     }
 
-    // Outside code block — escape and convert markdown
-    let processed = escapeMarkdownV2(line)
-      // Bold: **text** → *text*
-      .replace(/\\\*\\\*(.+?)\\\*\\\*/g, '*$1*')
-      // Inline code: `text` (re-add backticks escaped by escapeMarkdownV2)
-      .replace(/\\`(.+?)\\`/g, '`$1`');
+    output.push(formatMarkdownLineHtml(line));
+  }
 
-    output.push(processed);
+  if (inCodeBlock && codeLines.length) {
+    output.push(`<pre>${escapeHtml(codeLines.join('\n'))}</pre>`);
   }
 
   return output.join('\n');
 }
 
+/** Alias for older requires / tests */
+const formatResponse = formatResponseHtml;
+
 /**
- * Split a message into chunks of at most MAX_LENGTH characters.
- * Tries to split at newlines to avoid cutting mid-word.
+ * Split a message into chunks of at most `maxLen` characters.
+ * Tries to split at newlines; avoids splitting inside ``` fences when possible.
  * @param {string} text
+ * @param {number} [maxLen]
  * @returns {string[]}
  */
-function splitMessage(text) {
-  if (text.length <= MAX_LENGTH) return [text];
+function splitMessage(text, maxLen = MAX_LENGTH) {
+  if (text.length <= maxLen) return [text];
 
   const chunks = [];
   let remaining = text;
 
-  while (remaining.length > MAX_LENGTH) {
-    // Find a good split point (last newline before the limit)
-    let splitAt = remaining.lastIndexOf('\n', MAX_LENGTH);
-    if (splitAt < MAX_LENGTH * 0.5) splitAt = MAX_LENGTH; // no good newline, hard cut
+  while (remaining.length > maxLen) {
+    let splitAt = remaining.lastIndexOf('\n', maxLen);
+    if (splitAt < maxLen * 0.5) splitAt = maxLen;
+
+    const segment = remaining.slice(0, splitAt);
+    const fenceCount = (segment.match(/```/g) || []).length;
+    if (fenceCount % 2 === 1) {
+      const closeIdx = remaining.indexOf('```', splitAt);
+      if (closeIdx !== -1) {
+        splitAt = Math.min(closeIdx + 3, remaining.length);
+      }
+    }
 
     chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt).replace(/^\n/, '');
+    remaining = remaining.slice(splitAt).replace(/^\n+/, '');
   }
 
   if (remaining) chunks.push(remaining);
@@ -95,8 +145,37 @@ function splitMessage(text) {
 }
 
 /**
+ * Bridge-side context estimate (not Cursor’s internal token count).
+ * Uses contextTokens + assumed window size so small usage is not rounded to 0%.
+ */
+function buildContextDisplay(state) {
+  const tokens = state.contextTokens ?? 0;
+  const win = state.contextWindowEstimate ?? 100000;
+  const rawPct = win > 0 ? Math.min(100, (tokens / win) * 100) : 0;
+  let filled = Math.floor(rawPct / 10);
+  if (rawPct > 0 && filled === 0) filled = 1;
+  filled = Math.min(10, Math.max(0, filled));
+  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+
+  let pctLabel;
+  if (tokens <= 0) pctLabel = '0%';
+  else if (rawPct < 10) pctLabel = `${rawPct.toFixed(1)}%`;
+  else pctLabel = `${Math.round(rawPct)}%`;
+
+  const tokLabel =
+    tokens >= 1000 ? `~${(tokens / 1000).toFixed(1)}k tok` : `~${Math.round(tokens)} tok`;
+
+  const plain = `Context: ${bar} ${pctLabel} (${tokLabel} bridge est.)`;
+  return {
+    markdownV2Line: '🧠 ' + escapeMarkdownV2(plain),
+    /** Short fragment for progress tick (plain text). */
+    progressShort: `${pctLabel} · ${tokLabel}`,
+  };
+}
+
+/**
  * Build the status widget message.
- * @param {{ mode, contextPercent, project }} state
+ * @param {{ mode, contextPercent, project, contextTokens?, contextWindowEstimate? }} state
  * @returns {string}
  */
 function formatStatusWidget(state) {
@@ -109,22 +188,24 @@ function formatStatusWidget(state) {
   };
 
   const mode = modeEmojis[state.mode] || modeEmojis.unknown;
-  const ctx = state.contextPercent || 0;
-
-  // Build context bar (10 chars)
-  const filled = Math.round(ctx / 10);
-  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+  const { markdownV2Line: contextLine } = buildContextDisplay(state);
 
   const project = state.project
-    ? `${state.project.emoji || '📁'} ${state.project.displayName || state.project.name}`
+    ? `${state.project.emoji || '📁'} ${escapeMarkdownV2(state.project.displayName || state.project.name)}`
     : '📁 None';
 
   const skill = state.pendingSkill
-    ? `\n🎯 Next skill: ${state.pendingSkill.emoji} ${state.pendingSkill.name}`
+    ? `\n🎯 Next skill: ${state.pendingSkill.emoji} ${escapeMarkdownV2(state.pendingSkill.name)}`
     : '';
 
   const ts = state.lastUpdated
-    ? new Date(state.lastUpdated).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    ? escapeMarkdownV2(
+        new Date(state.lastUpdated).toLocaleTimeString('en-IN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      )
     : '—';
 
   return [
@@ -132,7 +213,7 @@ function formatStatusWidget(state) {
     '',
     `${project}`,
     `⚙️ Mode: ${mode}`,
-    `🧠 Context: ${bar} ${ctx}%`,
+    contextLine,
     skill,
     '',
     `_Last sync: ${ts}_`,
@@ -148,8 +229,11 @@ function formatError(message) {
 
 module.exports = {
   formatResponse,
+  formatResponseHtml,
   splitMessage,
   formatStatusWidget,
   formatError,
   escapeMarkdownV2,
+  escapeHtml,
+  buildContextDisplay,
 };

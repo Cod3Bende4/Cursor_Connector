@@ -10,7 +10,9 @@ const { activateSkill, getProjectSkills, getPendingSkill, clearPendingSkill, SKI
 const { monitor } = require('../monitor/contextMonitor');
 const { formatStatusWidget } = require('./formatter');
 const { injectMessage, isCursorRunning } = require('../cursor/injector');
-const logger = require('../utils/logger');
+const { openNewAgentChat } = require('../cursor/newChat');
+const { switchModelBySearch } = require('../cursor/modelPicker');
+const { getModelAliases, resolveModelSearch } = require('../utils/modelsRegistry');
 
 /**
  * Register all commands on the bot instance.
@@ -29,13 +31,16 @@ function registerCommands(bot, chatId, statusWidget) {
       `Cursor: ${cursor}\n\n` +
       `Just send any message to talk to Cursor\\.\n\n` +
       `*Commands:*\n` +
-      `/mode plan|debug|ask|agent\n` +
+      `/mode plan\\|debug\\|ask\\|agent\n` +
+      `/setmodel \\<name\\> — AI model \\(Cmd \\+ / picker\\)\n` +
+      `/models — model aliases from models\\.json\n` +
       `/project \\<name\\>\n` +
       `/projects — list all\n` +
+      `/newchat or /chatnew — new AI chat\n` +
       `/skill \\<name\\>\n` +
       `/skills — list all\n` +
       `/status — current state\n` +
-      `/clear — clear context\n` +
+      `/clear — new chat \\+ reset context\n` +
       `/help — this message`,
       { parse_mode: 'MarkdownV2' }
     );
@@ -49,12 +54,15 @@ function registerCommands(bot, chatId, statusWidget) {
       `Send any text to forward it to Cursor\\.\n\n` +
       `/start — welcome\n` +
       `/mode plan\\|debug\\|ask\\|agent\n` +
+      `/setmodel \\<name\\> — switch model\n` +
+      `/models — model aliases\n` +
       `/project \\<name\\>\n` +
       `/projects — list projects\n` +
+      `/newchat or /chatnew — new AI chat\n` +
       `/skill \\<name\\> — next message\n` +
       `/skills — list skills\n` +
       `/status — widget snapshot\n` +
-      `/clear — new chat in Cursor\n` +
+      `/clear — new chat \\+ reset context\n` +
       `/help — this message`,
       { parse_mode: 'MarkdownV2' }
     );
@@ -68,7 +76,7 @@ function registerCommands(bot, chatId, statusWidget) {
       const project = getCurrentProject();
       const pendingSkill = getPendingSkill();
       const text = formatStatusWidget({ ...state, project, pendingSkill });
-      await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, text, { parse_mode: 'MarkdownV2' });
     } catch (err) {
       await bot.sendMessage(chatId, `⚠️ Status error: ${err.message}`);
     }
@@ -154,28 +162,64 @@ function registerCommands(bot, chatId, statusWidget) {
     );
   });
 
-  // /clear
-  bot.onText(/\/clear/, async (msg) => {
+  // /setmodel <alias or search string>
+  bot.onText(/\/setmodel(?:@\w+)? (.+)/, async (msg, match) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const raw = match[1].trim();
+    try {
+      const search = resolveModelSearch(raw);
+      await switchModelBySearch(search);
+      await bot.sendMessage(
+        chatId,
+        `✅ Model picker searched for: ${search}\nConfirm in Cursor if multiple models matched.`,
+      );
+    } catch (err) {
+      await bot.sendMessage(chatId, `❌ ${err.message}`);
+    }
+  });
+
+  // /models
+  bot.onText(/\/models(?:@\w+)?$/, async (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const list = getModelAliases();
+    if (list.length === 0) {
+      await bot.sendMessage(
+        chatId,
+        'No models.json aliases. Copy models.json.example to models.json, or use /setmodel with any search text.',
+      );
+      return;
+    }
+    const lines = list.map((m) => `• ${m.id} → ${m.search}`);
+    await bot.sendMessage(chatId, `Model aliases:\n\n${lines.join('\n')}`);
+  });
+
+  // /newchat | /chatnew — new AI chat (command palette)
+  bot.onText(/\/(?:newchat|chatnew)(@\w+)?$/, async (msg) => {
     if (String(msg.chat.id) !== String(chatId)) return;
     try {
-      // Inject a "new conversation" command or use keyboard shortcut
-      // Cursor's new chat: Cmd+L (opens new chat)
-      const { execFile } = require('child_process');
-      await new Promise((res, rej) => {
-        execFile('osascript', ['-e', `
-          tell application "System Events"
-            tell process "Cursor"
-              keystroke "l" using command down
-            end tell
-          end tell
-        `], (err) => err ? rej(err) : res());
-      });
+      await openNewAgentChat();
       monitor.resetTokens();
       clearPendingSkill();
-      await bot.sendMessage(chatId, '🧹 Context cleared \\(new chat opened in Cursor\\)', { parse_mode: 'MarkdownV2' });
+      await bot.sendMessage(chatId, '✅ *New chat* opened in Cursor\\. Send a message when ready\\.', {
+        parse_mode: 'MarkdownV2',
+      });
       await statusWidget.update();
     } catch (err) {
-      await bot.sendMessage(chatId, `❌ Could not clear context: ${err.message}`);
+      await bot.sendMessage(chatId, `❌ ${err.message}`);
+    }
+  });
+
+  // /clear — new chat + reset heuristics
+  bot.onText(/\/clear(?:@\w+)?$/, async (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    try {
+      await openNewAgentChat();
+      monitor.resetTokens();
+      clearPendingSkill();
+      await bot.sendMessage(chatId, '🧹 *New chat* \\+ context reset\\. Ready\\. ', { parse_mode: 'MarkdownV2' });
+      await statusWidget.update();
+    } catch (err) {
+      await bot.sendMessage(chatId, `❌ Could not open new chat: ${err.message}`);
     }
   });
 

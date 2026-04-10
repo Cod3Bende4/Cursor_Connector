@@ -1,0 +1,7 @@
+{
+  "models": [
+    { "id": "sonnet", "search": "Sonnet" },
+    { "id": "opus", "search": "Opus" },
+    { "id": "gpt", "search": "gpt-4" }
+  ]
+}

@@ -167,4 +167,10 @@ if (require.main === module) {
     .catch(e => { console.error('❌ Failed:', e.message); process.exit(1); });
 }
 
-module.exports = { injectMessage, isCursorRunning, focusCursor, discoverChatInput };
+module.exports = {
+  injectMessage,
+  isCursorRunning,
+  focusCursor,
+  focusCursorChat,
+  discoverChatInput,
+};

@@ -149,12 +149,20 @@ async function switchMode(mode) {
  * Try to detect the currently active mode by inspecting Cursor's UI.
  * Returns the mode string or 'unknown'.
  */
+function normalizeModeFromDescription(text) {
+  const lower = String(text || '').toLowerCase();
+  if (lower.includes('plan')) return 'plan';
+  if (lower.includes('debug')) return 'debug';
+  if (lower.includes('agent')) return 'agent';
+  if (lower.includes('ask')) return 'ask';
+  return 'unknown';
+}
+
 async function detectCurrentMode() {
   try {
     const script = `
       tell application "System Events"
         tell process "${config.cursor.appName}"
-          -- Look for selected/focused mode buttons
           set allButtons to every button of window 1
           repeat with btn in allButtons
             try
@@ -164,18 +172,54 @@ async function detectCurrentMode() {
               end if
             end try
           end repeat
+          repeat with btn in allButtons
+            try
+              set d to description of btn as string
+              if d contains "Agent" or d contains "Ask" or d contains "Plan" or d contains "Debug" then
+                set sel to value of attribute "AXSelected" of btn
+                if sel is true then return d
+              end if
+            end try
+          end repeat
+          set allRadios to every radio button of window 1
+          repeat with rb in allRadios
+            try
+              set sel to value of attribute "AXSelected" of rb
+              if sel is true then
+                set d to value of attribute "AXTitle" of rb as string
+                return d
+              end if
+            end try
+          end repeat
           return "unknown"
         end tell
       end tell
     `;
     const result = await runAppleScript(script);
-    // Normalize to known modes
-    const lower = result.toLowerCase();
-    if (lower.includes('plan')) return 'plan';
-    if (lower.includes('debug')) return 'debug';
-    if (lower.includes('agent')) return 'agent';
-    if (lower.includes('ask')) return 'ask';
-    return 'unknown';
+    const m = normalizeModeFromDescription(result);
+    if (m !== 'unknown') return m;
+  } catch {
+    /* try fallback below */
+  }
+  try {
+    const script = `
+      tell application "System Events"
+        tell process "${config.cursor.appName}"
+          set allTexts to every static text of window 1
+          repeat with t in allTexts
+            try
+              set v to value of t as string
+              if v is "Ask" or v is "Agent" or v is "Plan" or v is "Debug" then
+                return v
+              end if
+            end try
+          end repeat
+          return "unknown"
+        end tell
+      end tell
+    `;
+    const result = await runAppleScript(script);
+    return normalizeModeFromDescription(result);
   } catch {
     return 'unknown';
   }

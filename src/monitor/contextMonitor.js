@@ -54,9 +54,16 @@ class ContextMonitor extends EventEmitter {
    */
   addTokens(approxTokens) {
     this._tokenCounter += approxTokens;
-    // Typical Cursor context window: ~100k tokens
-    const percent = Math.min(100, Math.round((this._tokenCounter / 100000) * 100));
-    this._updateState({ contextPercent: percent, contextTokens: this._tokenCounter });
+    const win = config.context?.estimatedWindowTokens || 100000;
+    const rawPct = Math.min(100, (this._tokenCounter / win) * 100);
+    // Avoid showing 0% for small usage: keep one decimal below 10%
+    const contextPercent =
+      rawPct === 0
+        ? 0
+        : rawPct >= 10
+          ? Math.round(rawPct)
+          : Math.round(rawPct * 10) / 10;
+    this._updateState({ contextPercent, contextTokens: this._tokenCounter });
   }
 
   /**
@@ -65,6 +72,13 @@ class ContextMonitor extends EventEmitter {
   resetTokens() {
     this._tokenCounter = 0;
     this._updateState({ contextPercent: 0, contextTokens: 0 });
+  }
+
+  /**
+   * Run one poll immediately (e.g. before Telegram status widget so mode is not stuck on "unknown").
+   */
+  async syncNow() {
+    await this._poll();
   }
 
   /**
@@ -79,10 +93,12 @@ class ContextMonitor extends EventEmitter {
         changed.mode = mode;
       }
 
-      // 2. Try to read context usage from UI
-      const contextPercent = await this._readContextFromUI();
-      if (contextPercent !== null && contextPercent !== this.state.contextPercent) {
-        changed.contextPercent = contextPercent;
+      // 2. Optional: read context from Cursor UI (Electron often hides this from AX; off by default)
+      if (config.context?.preferUiReading) {
+        const uiPct = await this._readContextFromUI();
+        if (uiPct !== null && uiPct !== this.state.contextPercent) {
+          changed.contextPercent = uiPct;
+        }
       }
 
       if (Object.keys(changed).length > 0) {
@@ -155,7 +171,10 @@ class ContextMonitor extends EventEmitter {
    * Get current state snapshot.
    */
   getState() {
-    return { ...this.state };
+    return {
+      ...this.state,
+      contextWindowEstimate: config.context?.estimatedWindowTokens || 100000,
+    };
   }
 }
 
@@ -166,4 +185,8 @@ function startMonitor() {
   monitor.start();
 }
 
-module.exports = { monitor, startMonitor };
+async function syncMonitor() {
+  await monitor.syncNow();
+}
+
+module.exports = { monitor, startMonitor, syncMonitor };

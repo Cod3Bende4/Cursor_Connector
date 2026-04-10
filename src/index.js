@@ -7,7 +7,7 @@ require('dotenv').config();
 const { validateConfig } = require('./utils/config');
 const logger = require('./utils/logger');
 const { startBot } = require('./telegram/bot');
-const { startMonitor } = require('./monitor/contextMonitor');
+const { startMonitor, syncMonitor } = require('./monitor/contextMonitor');
 
 async function main() {
   logger.info('🚀 Cursor Telegram Bridge starting...');
@@ -21,9 +21,11 @@ async function main() {
     process.exit(1);
   }
 
-  // Start the context/mode monitor
+  // Start the context/mode monitor and sync once so mode/context are fresh before Telegram UI
   startMonitor();
   logger.info('✅ Context monitor started');
+  await syncMonitor();
+  logger.info('✅ Context monitor synced with Cursor');
 
   // Start the Telegram bot
   await startBot();

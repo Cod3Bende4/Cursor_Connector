@@ -127,7 +127,10 @@ Then open Telegram, send any message to your bot, and watch it appear in Cursor.
 | `/skill security` | Apply Security skill to next message     |
 | `/skill tdd`      | Apply TDD skill to next message          |
 | `/skills`         | List all available skills                |
-| `/clear`          | Open new chat in Cursor (resets context) |
+| `/setmodel <q>`   | Open model picker (⌘/) and filter by `q` |
+| `/models`         | List aliases from optional `models.json` |
+| `/newchat` / `/chatnew` | New AI chat (runs command `aichat.newchataction` by default) |
+| `/clear`          | Same as `/newchat` + reset context %    |
 | `/help`           | Show all commands                        |
 
 
@@ -142,10 +145,12 @@ A pinned message in your Telegram chat shows live state:
 
 🚀 My App
 ⚙️ Mode: 📋 Plan
-🧠 Context: ████████░░ 78%
+🧠 Context: ████████░░ 78.0% (~78.0k tok bridge est.)
 
 Last sync: 14:32:05
 ```
+
+The **context** line is a **bridge estimate** (characters sent/received via Telegram, mapped to tokens)—not Cursor’s internal counter. Small chats can look like a low % until enough volume accumulates; adjust `CONTEXT_WINDOW_TOKENS_ESTIMATE` in `.env` if your model uses a larger window (e.g. `200000`).
 
 ---
 
@@ -212,6 +217,13 @@ pm2 save
 
 - Check `CURSOR_APP_NAME` in `.env` matches the exact app name (check Activity Monitor)
 
+**/newchat or /clear opens the palette but does not start a new chat**
+
+- The bridge pastes `NEW_CHAT_PALETTE_QUERY` into the Command Palette (default `aichat.newchataction`). Typing plain English like “New Chat” often highlights the wrong command (e.g. New File).
+- In Cursor, press **⌘⇧P**, type `aichat` or `new chat`, and note the **exact** label of the command you want. Set `NEW_CHAT_PALETTE_QUERY` in `.env` to that string or to the command id Cursor shows.
+- Optional fallbacks: `NEW_CHAT_PALETTE_ALTERNATES=workbench.action.chat.newChat` (comma- or pipe-separated).
+- Set `NEW_CHAT_FOCUS_CHAT_FIRST=false` if **⌘L** before the command interferes with your layout.
+
 ---
 
 ## Project Structure
@@ -224,6 +236,7 @@ cursor-telegram-bridge/
 │   │   ├── injector.js           # AppleScript message injection
 │   │   ├── modeSwitch.js         # Mode switching (Ask/Agent/Plan/Debug)
 │   │   ├── projectSwitch.js      # Project switching
+│   │   ├── newChat.js            # New chat via Command Palette
 │   │   ├── responseCapture.js    # Three-strategy response capture
 │   │   └── skillsManager.js      # Skills prefix management
 │   ├── telegram/

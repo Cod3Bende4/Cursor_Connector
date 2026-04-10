@@ -14,10 +14,14 @@ const { applyPendingSkill, getPendingSkill } = require('../cursor/skillsManager'
 const { monitor } = require('../monitor/contextMonitor');
 const { getCurrentProject } = require('../cursor/projectSwitch');
 const { registerCommands } = require('./commands');
-const { formatResponse, splitMessage, formatStatusWidget } = require('./formatter');
+const { formatResponseHtml, splitMessage, formatStatusWidget } = require('./formatter');
+const { createProgressTicker } = require('./progressUpdates');
 
 // Approx tokens per character (rough heuristic)
 const CHARS_PER_TOKEN = 4;
+
+/** Raw chunk size before HTML formatting (tags + &amp; expand the payload). */
+const TELEGRAM_RAW_CHUNK_LEN = 2400;
 
 // Debounce incoming messages (ms)
 const MESSAGE_DEBOUNCE_MS = 1500;
@@ -36,7 +40,7 @@ function createStatusWidget(chatId) {
         const state = monitor.getState();
         const project = getCurrentProject();
         const text = formatStatusWidget({ ...state, project, pendingSkill: getPendingSkill() });
-        const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+        const msg = await bot.sendMessage(chatId, text, { parse_mode: 'MarkdownV2' });
         statusMessageId = msg.message_id;
         try {
           await bot.pinChatMessage(chatId, statusMessageId, { disable_notification: true });
@@ -56,7 +60,7 @@ function createStatusWidget(chatId) {
         await bot.editMessageText(text, {
           chat_id: chatId,
           message_id: statusMessageId,
-          parse_mode: 'Markdown',
+          parse_mode: 'MarkdownV2',
         });
       } catch (err) {
         if (!err.message.includes('message is not modified')) {
@@ -69,18 +73,20 @@ function createStatusWidget(chatId) {
 
 /**
  * Send a long response as multiple messages if needed.
+ * Uses Telegram HTML (bold, code, pre, links) — more reliable than MarkdownV2 for AI text.
  */
 async function sendLongMessage(chatId, text, replyToId) {
-  const chunks = splitMessage(text);
-  for (let i = 0; i < chunks.length; i++) {
+  const rawChunks = splitMessage(text, TELEGRAM_RAW_CHUNK_LEN);
+  for (let i = 0; i < rawChunks.length; i++) {
     const opts = i === 0 && replyToId
       ? { reply_to_message_id: replyToId }
       : {};
+    const formatted = formatResponseHtml(rawChunks[i]);
     try {
-      await bot.sendMessage(chatId, chunks[i], { parse_mode: 'Markdown', ...opts });
-    } catch {
-      // If Markdown fails (e.g. unbalanced backticks), send as plain text
-      await bot.sendMessage(chatId, chunks[i], opts);
+      await bot.sendMessage(chatId, formatted, { parse_mode: 'HTML', ...opts });
+    } catch (err) {
+      logger.warn('Telegram HTML send failed, plain fallback:', err.message);
+      await bot.sendMessage(chatId, rawChunks[i], opts);
     }
   }
 }
@@ -166,8 +172,23 @@ async function startBot() {
       // Track approximate tokens sent
       monitor.addTokens(Math.ceil(messageToSend.length / CHARS_PER_TOKEN));
 
-      // Wait for response
-      const response = await waitForResponse({ timeoutMs: config.capture.timeoutMs });
+      let progressTicker = null;
+      if (thinkingMsg && config.progress?.enabled) {
+        progressTicker = createProgressTicker({
+          bot,
+          chatId,
+          messageId: thinkingMsg.message_id,
+        });
+        progressTicker.start();
+      }
+
+      let response;
+      try {
+        response = await waitForResponse({ timeoutMs: config.capture.timeoutMs });
+      } finally {
+        if (progressTicker) progressTicker.stop();
+      }
+
       logger.info(`Response captured via [${response.strategy}] (${response.text.length} chars)`);
 
       // Track approximate tokens received
